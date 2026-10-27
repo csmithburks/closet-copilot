@@ -1,0 +1,37 @@
+{
+  "expo": {
+    "name": "Closet Copilot",
+    "slug": "closet-copilot",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#F6F1EA",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.closetcopilot.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Take photos of your clothes for your closet.",
+        "NSPhotoLibraryUsageDescription": "Choose photos of your clothes for your closet.",
+        "NSLocationWhenInUseUsageDescription": "Get local weather so outfits fit the day."
+      }
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "name": "Closet Copilot",
+      "shortName": "Closet",
+      "backgroundColor": "#F6F1EA",
+      "themeColor": "#F6F1EA"
+    },
+    "plugins": [
+      "expo-status-bar",
+      "expo-sharing"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "6c0efd74-6b5d-4e92-8d22-9f5a65869bd2"
+      }
+    }
+  }
+}
