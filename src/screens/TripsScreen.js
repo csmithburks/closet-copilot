@@ -349,7 +349,7 @@ function TripDetail({ trip, items, images, prefs, feedback, onBack, onEdit, onUp
                           {p.item.name}
                         </Text>
                         <Text style={styles.rowSub}>
-                          {p.wears} outfit{p.wears === 1 ? '' : 's'}
+                          {p.wears} day{p.wears === 1 ? '' : 's'}
                         </Text>
                       </View>
                     </Pressable>

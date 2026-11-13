@@ -93,18 +93,23 @@ const WEARS = {
   athletic_shorts: 1, leggings: 1, dress: 1, jumpsuit: 1,
 };
 
-// How many times a piece can reasonably be worn on one trip without laundry.
+// House rules for tops, bottoms and dresses: worn on at most two days of a
+// trip, and never two days in a row. Shoes and outer layers are exempt.
+export const MAX_DAYS = 2;
+export const isCore = (item) => ['top', 'bottom', 'onepiece'].includes(typeOf(item).cat);
+
+// On how many days of a trip a piece can be worn.
 export function maxWears(item, bag) {
   const t = typeOf(item);
   if (t.cat === 'shoes' || t.cat === 'outerwear') return Infinity;
   const base = WEARS[item.type] ?? 2;
-  // Packing light: shirts and gym kit get one more outing.
-  return bag === 'carryon' && (base >= 2 || t.athletic) ? base + 1 : base;
+  // Packing light: gym kit gets a second outing.
+  return Math.min(MAX_DAYS, bag === 'carryon' && t.athletic ? base + 1 : base);
 }
 
 // ---------- planner ----------
 
-const ctxKey = (occasion, tempF, rain) => `${occasion}|${tempF == null ? 'x' : Math.round(tempF / 4)}|${rain ? 1 : 0}`;
+const ctxKey = (occasion, tempF, rain) => `v2|${occasion}|${tempF == null ? 'x' : Math.round(tempF / 4)}|${rain ? 1 : 0}`;
 
 // The settled outfits of a plan, in the shape planTrip takes back as `keep`.
 export function picksOf(plan) {
@@ -130,7 +135,7 @@ export function planTrip({ items, days, prefs, feedback, bag = 'carryon', avoid 
   const cache = new Map();
   const candidatesFor = (occasion, tempF, rain) => {
     const key = ctxKey(occasion, tempF, rain);
-    if (!cache.has(key)) cache.set(key, generateOutfits(closet, ctxOf(occasion, tempF, rain), 24));
+    if (!cache.has(key)) cache.set(key, generateOutfits(closet, ctxOf(occasion, tempF, rain), 48));
     return cache.get(key);
   };
   const ctxOf = (occasion, tempF, rain) => ({ occasion, aesthetic: prefs?.aesthetic, tempF, rain, prefs, feedback: feedback || {}, now: 0, seed: 0 });
@@ -164,42 +169,40 @@ export function planTrip({ items, days, prefs, feedback, bag = 'carryon', avoid 
     }
   });
 
-  // Uses of each piece across the trip, leaving out one slot.
-  const usesWithout = (skip) => {
-    const uses = {};
+  // The days each piece is worn on across the trip, leaving out one slot.
+  const daysWithout = (skip) => {
+    const days = {};
     for (const s of slots) {
       if (s === skip || s.pick < 0) continue;
-      for (const it of s.options[s.pick].items) uses[it.id] = (uses[it.id] || 0) + 1;
+      for (const it of s.options[s.pick].items) (days[it.id] ||= new Set()).add(s.dayIndex);
     }
-    return uses;
+    return days;
   };
-  // Tops/dresses worn on the same or the neighboring day, to keep days looking different.
-  const nearbyCores = (skip) => {
-    const ids = new Set();
-    for (const s of slots) {
-      if (s === skip || s.pick < 0 || Math.abs(s.dayIndex - skip.dayIndex) > 1) continue;
-      for (const it of s.options[s.pick].items) if (['top', 'onepiece'].includes(typeOf(it).cat)) ids.add(it.id);
-    }
-    return ids;
-  };
-  const value = (outfit, uses, near) => {
+  const HARD = 1000; // breaking a house rule is only ever a last resort
+  const value = (outfit, worn, day) => {
     let v = outfit.score;
     for (const it of outfit.items) {
-      const used = uses[it.id] || 0;
-      if (!used) v -= lambda * bulk(it);
-      if (used + 1 > maxWears(it, bag)) v -= 40;
-      if (near.has(it.id)) v -= 8;
+      const on = worn[it.id];
+      if (!on) v -= lambda * bulk(it);
+      const sameDay = !!on?.has(day);
+      const count = (on?.size || 0) + (sameDay ? 0 : 1);
+      if (isCore(it)) {
+        if (count > MAX_DAYS) v -= HARD;
+        if (on?.has(day - 1) || on?.has(day + 1)) v -= HARD;
+        // Same top twice in one day: allowed, but a fresh one looks better.
+        if (sameDay && typeOf(it).cat !== 'bottom') v -= 8;
+      }
+      if (count > maxWears(it, bag)) v -= 40;
     }
     return v;
   };
   const choose = (s) => {
     if (s.fixed || !s.options.length) return;
-    const uses = usesWithout(s);
-    const near = nearbyCores(s);
+    const worn = daysWithout(s);
     let best = 0;
     let bestV = -Infinity;
     s.options.forEach((o, i) => {
-      const v = value(o, uses, near);
+      const v = value(o, worn, s.dayIndex);
       if (v > bestV) {
         bestV = v;
         best = i;
@@ -222,7 +225,8 @@ export function planTrip({ items, days, prefs, feedback, bag = 'carryon', avoid 
     if (!changed) break;
   }
 
-  const wears = usesWithout(null);
+  const wornOn = daysWithout(null);
+  const wears = Object.fromEntries(Object.entries(wornOn).map(([id, d]) => [id, d.size]));
   const byId = Object.fromEntries(closet.map((i) => [i.id, i]));
   const original = Object.fromEntries(items.map((i) => [i.id, i]));
   const CAT_ORDER = { outerwear: 0, top: 1, onepiece: 2, bottom: 3, shoes: 4 };
@@ -241,10 +245,14 @@ export function planTrip({ items, days, prefs, feedback, bag = 'carryon', avoid 
       } (${list.length} time${list.length === 1 ? '' : 's'} on this trip).`
     );
   }
-  const overworn = pack.filter((p) => p.wears > maxWears(byId[p.item.id], bag));
-  if (overworn.length) {
-    gaps.push(`You’ll re-wear ${overworn.map((p) => p.item.name).join(', ')} more than is ideal — plan a wash, or add similar pieces to your closet.`);
-  }
+  const names = (list) => list.map((p) => p.item.name).join(', ');
+  const tooOften = pack.filter((p) => isCore(p.item) && p.wears > MAX_DAYS);
+  const backToBack = pack.filter((p) => {
+    const d = wornOn[p.item.id];
+    return isCore(p.item) && !tooOften.includes(p) && [...d].some((x) => d.has(x + 1));
+  });
+  if (tooOften.length) gaps.push(`Not enough to go around: ${names(tooOften)} would be worn on more than ${MAX_DAYS} days. Add similar pieces to your closet, or plan a wash.`);
+  if (backToBack.length) gaps.push(`Not enough to go around: ${names(backToBack)} would be worn two days in a row.`);
 
   const out = days.map((day) => ({
     ...day,
@@ -328,7 +336,7 @@ export function wearInTransit(plan) {
 export function packingText({ title, plan, extras, essentialsList }) {
   const lines = [title, ''];
   lines.push('CLOTHES');
-  for (const p of plan.pack) lines.push(`☐ ${p.item.name}${p.wears > 1 ? ` (×${p.wears} wears)` : ''}`);
+  for (const p of plan.pack) lines.push(`☐ ${p.item.name}${p.wears > 1 ? ` (${p.wears} days)` : ''}`);
   lines.push('', 'ESSENTIALS');
   for (const e of essentialsList) lines.push(`☐ ${e.label}${e.qty > 1 ? ` ×${e.qty}` : ''}`);
   if (extras?.length) {
