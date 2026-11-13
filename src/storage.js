@@ -16,7 +16,7 @@ export const DEFAULT_PREFS = {
   occasion: 'casual',
   aesthetic: null,
   tempUnit: 'F',
-  cleanPhotos: true, // turn new photos into catalog-style shots
+  cleanPhotos: false, // turn new photos into catalog-style shots
 };
 
 async function read(key, fallback) {

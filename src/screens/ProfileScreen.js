@@ -23,6 +23,8 @@ export default function ProfileScreen({
   onChangePrefs,
   photoCount,
   onCleanAllPhotos,
+  cleanedCount,
+  onUndoCleanAll,
   aiKey,
   onChangeAiKey,
   buildBackup,
@@ -72,6 +74,23 @@ export default function ProfileScreen({
     }
   };
 
+  const undoClean = async () => {
+    setBusy(true);
+    try {
+      const { restored, lost } = await onUndoCleanAll();
+      notify(
+        restored ? 'Originals restored' : 'Nothing to restore',
+        `${restored} photo${restored === 1 ? '' : 's'} put back as taken.${
+          lost
+            ? ` ${lost} ${lost === 1 ? 'was' : 'were'} cleaned up before the app kept originals. Restore a backup made before the clean-up to get ${lost === 1 ? 'it' : 'them'} back, or retake ${lost === 1 ? 'it' : 'them'}.`
+            : ''
+        }`
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const restore = async () => {
     try {
       const f = await pickTextFile();
@@ -79,8 +98,11 @@ export default function ProfileScreen({
       setBusy(true);
       const data = JSON.parse(f.text);
       if (data.app !== 'closet-copilot') throw new Error('That file is not a Closet Copilot backup.');
-      const n = await onRestore(data);
-      notify('Restored', `Added ${n} piece${n === 1 ? '' : 's'} to your closet.`);
+      const { pieces: n, photos } = await onRestore(data);
+      notify(
+        'Restored',
+        `Added ${n} piece${n === 1 ? '' : 's'} to your closet.${photos ? ` Put back ${photos} original photo${photos === 1 ? '' : 's'}.` : ''}`
+      );
     } catch (e) {
       notify('Restore failed', e?.message || String(e));
     } finally {
@@ -146,7 +168,7 @@ export default function ProfileScreen({
                 <Text style={styles.optTitle}>Clean up new photos</Text>
                 <Text style={styles.optSub}>Removes the background and centers the piece on white, like a catalog shot.</Text>
               </View>
-              <Switch value={prefs.cleanPhotos !== false} onValueChange={(v) => onChangePrefs({ cleanPhotos: v })} />
+              <Switch value={prefs.cleanPhotos === true} onValueChange={(v) => onChangePrefs({ cleanPhotos: v })} />
             </View>
             {photoCount > 0 && (
               <Pressable onPress={cleanAll}>
@@ -155,10 +177,17 @@ export default function ProfileScreen({
                 </Text>
               </Pressable>
             )}
+            {cleanedCount > 0 && (
+              <Pressable onPress={undoClean}>
+                <Text style={styles.link}>
+                  Undo clean-up on {cleanedCount} photo{cleanedCount === 1 ? '' : 's'}
+                </Text>
+              </Pressable>
+            )}
             <Text style={styles.small}>
               Runs on your phone — nothing is uploaded. Works best when the piece is laid flat or hung against a plain surface
               that contrasts with it, with the whole piece in frame. If a photo can’t be separated cleanly it’s kept as
-              taken, and you can always switch a piece back to the original before saving.
+              taken. The original is always kept, so you can undo clean-up here or on any single piece.
             </Text>
           </View>
         </>

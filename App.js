@@ -111,12 +111,20 @@ export default function App() {
     }
   };
 
-  const saveItem = async (item, photo, backPhoto) => {
+  // originals: { front, back } — the photo as taken, kept next to a cleaned-up
+  // one (under `${key}:orig`) so clean-up can always be undone.
+  const saveItem = async (item, photo, backPhoto, originals = {}) => {
     const isNew = !item.id;
     const saved = isNew ? { ...item, id: uid(), createdAt: Date.now() } : { ...item };
     try {
-      if (photo !== undefined) await storePhoto(saved.id, photo);
-      if (backPhoto !== undefined) await storePhoto(`${saved.id}:back`, backPhoto);
+      for (const [key, uri, flag, orig] of [
+        [saved.id, photo, 'photoClean', originals.front],
+        [`${saved.id}:back`, backPhoto, 'backClean', originals.back],
+      ]) {
+        if (uri === undefined) continue;
+        await storePhoto(key, uri);
+        await storePhoto(`${key}:orig`, uri && saved[flag] && orig ? orig : null);
+      }
     } catch (e) {
       notify('Photo not saved', 'Your phone may be out of storage for this app. The piece was saved without the new photo.');
     }
@@ -127,8 +135,7 @@ export default function App() {
   const deleteItem = async (id) => {
     updateItems(items.filter((i) => i.id !== id));
     try {
-      await deleteImage(id);
-      await deleteImage(`${id}:back`);
+      for (const k of [id, `${id}:back`, `${id}:orig`, `${id}:back:orig`]) await deleteImage(k);
     } catch {}
     setImages((m) => {
       const n = { ...m };
@@ -168,6 +175,7 @@ export default function App() {
           continue;
         }
         try {
+          await storePhoto(`${key}:orig`, images[key]); // keep the photo as taken
           await storePhoto(key, res.uri);
           (flags[item.id] ||= {})[flag] = true;
           cleaned++;
@@ -178,6 +186,32 @@ export default function App() {
     }
     if (cleaned) updateItems(items.map((i) => (flags[i.id] ? { ...i, ...flags[i.id] } : i)));
     return { cleaned, skipped };
+  };
+
+  // Puts back the photo as taken wherever one was kept. Returns { restored, lost }
+  // (lost = cleaned photos whose original was not kept).
+  const undoCleanAll = async () => {
+    let restored = 0;
+    let lost = 0;
+    const flags = {};
+    for (const item of items) {
+      for (const [key, flag] of [[item.id, 'photoClean'], [`${item.id}:back`, 'backClean']]) {
+        if (!item[flag] || !images[key]) continue;
+        const orig = images[`${key}:orig`];
+        if (!orig) {
+          lost++;
+          continue;
+        }
+        try {
+          await storePhoto(key, orig);
+          await storePhoto(`${key}:orig`, null);
+          (flags[item.id] ||= {})[flag] = false;
+          restored++;
+        } catch {}
+      }
+    }
+    if (restored) updateItems(items.map((i) => (flags[i.id] ? { ...i, ...flags[i.id] } : i)));
+    return { restored, lost };
   };
 
   // ---- trips ----
@@ -261,8 +295,32 @@ export default function App() {
         } catch {}
       }
     }
-    setImages((m) => ({ ...m, ...added }));
-    updateItems([...fresh, ...items]);
+    // Pieces already here whose photo was cleaned up since the backup: put the
+    // backed-up (as-taken) photo back.
+    const backed = Object.fromEntries((data.items || []).filter((i) => i && i.id).map((i) => [i.id, i]));
+    const unflag = {};
+    let photosRestored = 0;
+    for (const i of items) {
+      const b = backed[i.id];
+      if (!b) continue;
+      for (const [key, flag] of [[i.id, 'photoClean'], [`${i.id}:back`, 'backClean']]) {
+        const src = b[flag] ? imgs[`${key}:orig`] : imgs[key];
+        if (!i[flag] || !src) continue;
+        try {
+          await putImage(key, src);
+          await deleteImage(`${key}:orig`);
+          added[key] = src;
+          (unflag[i.id] ||= {})[flag] = false;
+          photosRestored++;
+        } catch {}
+      }
+    }
+    setImages((m) => {
+      const n = { ...m, ...added };
+      for (const id of Object.keys(unflag)) for (const k of [`${id}:orig`, `${id}:back:orig`]) if (added[k.replace(':orig', '')]) delete n[k];
+      return n;
+    });
+    updateItems([...fresh, ...items.map((i) => (unflag[i.id] ? { ...i, ...unflag[i.id] } : i))]);
     const oIds = new Set(outfits.map((o) => o.id));
     const nextO = [...outfits, ...(data.outfits || []).filter((o) => o && !oIds.has(o.id))];
     setOutfits(nextO);
@@ -280,7 +338,7 @@ export default function App() {
     }
     if (data.prefs) changePrefs(data.prefs);
     if (data.feedback && !Object.keys(feedback.pairs || {}).length) updateFeedback(data.feedback);
-    return fresh.length;
+    return { pieces: fresh.length, photos: photosRestored };
   };
 
   const clearEverything = async () => {
@@ -380,6 +438,8 @@ export default function App() {
         onChangePrefs={changePrefs}
         photoCount={items.reduce((n, i) => n + (images[i.id] && !i.photoClean ? 1 : 0) + (images[`${i.id}:back`] && !i.backClean ? 1 : 0), 0)}
         onCleanAllPhotos={cleanAllPhotos}
+        cleanedCount={items.reduce((n, i) => n + (images[i.id] && i.photoClean ? 1 : 0) + (images[`${i.id}:back`] && i.backClean ? 1 : 0), 0)}
+        onUndoCleanAll={undoCleanAll}
         aiKey={aiKey}
         onChangeAiKey={(k) => {
           setAiKey(k);
@@ -431,7 +491,9 @@ export default function App() {
         imageUri={editor?.item ? images[editor.item.id] : null}
         backUri={editor?.item ? images[`${editor.item.id}:back`] : null}
         aiKey={aiKey}
-        autoClean={prefs.cleanPhotos !== false}
+        origUri={editor?.item ? images[`${editor.item.id}:orig`] : null}
+        backOrigUri={editor?.item ? images[`${editor.item.id}:back:orig`] : null}
+        autoClean={prefs.cleanPhotos === true}
         onSave={saveItem}
         onDelete={deleteItem}
         onStyle={(item) => {

@@ -35,7 +35,7 @@ const blank = () => ({
 });
 
 // item: existing item to edit, or null to add a new one.
-export default function ItemEditor({ visible, item, imageUri, backUri, aiKey, autoClean, onSave, onDelete, onStyle, onClose }) {
+export default function ItemEditor({ visible, item, imageUri, backUri, origUri, backOrigUri, aiKey, autoClean, onSave, onDelete, onStyle, onClose }) {
   const [draft, setDraft] = useState(blank());
   const [photo, setPhoto] = useState(null);
   const [back, setBack] = useState(null);
@@ -55,10 +55,14 @@ export default function ItemEditor({ visible, item, imageUri, backUri, aiKey, au
     setDetected(null);
     setAiNote(null);
     setAiBusy(false);
-    setVersions({});
+    // A saved cleaned-up photo keeps its original, so it can be switched back.
+    setVersions({
+      front: item?.photoClean && imageUri && origUri ? { orig: origUri, clean: imageUri } : null,
+      back: item?.backClean && backUri && backOrigUri ? { orig: backOrigUri, clean: backUri } : null,
+    });
     setCleaning(null);
     setCleanNote(null);
-  }, [visible, item, imageUri, backUri]);
+  }, [visible, item, imageUri, backUri, origUri, backOrigUri]);
 
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
 
@@ -160,7 +164,7 @@ export default function ItemEditor({ visible, item, imageUri, backUri, aiKey, au
     if (!name) return notify('Add a name', 'Give this piece a name.');
     const frontChange = photo !== (item ? imageUri || null : null) ? photo : undefined;
     const backChange = back !== (item ? backUri || null : null) ? back : undefined;
-    onSave({ ...draft, name, hasPhoto: !!photo, hasBack: !!back }, frontChange, backChange);
+    onSave({ ...draft, name, hasPhoto: !!photo, hasBack: !!back }, frontChange, backChange, { front: versions.front?.orig, back: versions.back?.orig });
   };
 
   const toggleDetail = (key) =>
