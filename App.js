@@ -7,10 +7,12 @@ import StyleScreen from './src/screens/StyleScreen';
 import ClosetScreen from './src/screens/ClosetScreen';
 import LooksScreen from './src/screens/LooksScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
+import TripsScreen from './src/screens/TripsScreen';
 import ItemEditor from './src/screens/ItemEditor';
 import { TYPES } from './src/catalog';
 import { demoCloset } from './src/demo';
 import { notify } from './src/dialogs';
+import { cleanPhoto } from './src/cleanup';
 import { applyFeedback } from './src/stylist';
 import { clearImages, deleteImage, loadAllImages, putImage } from './src/imageStore';
 import {
@@ -21,6 +23,7 @@ import {
   loadLog,
   loadOutfits,
   loadPrefs,
+  loadTrips,
   loadAiKey,
   saveAiKey,
   saveFeedback,
@@ -28,6 +31,7 @@ import {
   saveLog,
   saveOutfits,
   savePrefs,
+  saveTrips,
 } from './src/storage';
 import { colors } from './src/theme';
 
@@ -37,6 +41,7 @@ const TABS = [
   { key: 'style', label: 'Style', icon: 'sparkles' },
   { key: 'closet', label: 'Closet', icon: 'shirt' },
   { key: 'looks', label: 'Looks', icon: 'albums' },
+  { key: 'trips', label: 'Trips', icon: 'airplane' },
   { key: 'profile', label: 'Profile', icon: 'person-circle' },
 ];
 
@@ -53,11 +58,12 @@ export default function App() {
   const [lockId, setLockId] = useState(null);
   const [editor, setEditor] = useState(null); // { item } | { item: null } for new
   const [aiKey, setAiKey] = useState('');
+  const [trips, setTrips] = useState([]);
 
   useEffect(() => {
     if (Platform.OS === 'web') setupHomeScreenApp();
     (async () => {
-      const [it, im, ou, lg, fb, pr, key] = await Promise.all([
+      const [it, im, ou, lg, fb, pr, key, tr] = await Promise.all([
         loadItems(),
         loadAllImages(),
         loadOutfits(),
@@ -65,7 +71,9 @@ export default function App() {
         loadFeedback(),
         loadPrefs(),
         loadAiKey(),
+        loadTrips(),
       ]);
+      setTrips(tr);
       setAiKey(key || '');
       setItems(it);
       setImages(im);
@@ -146,6 +154,52 @@ export default function App() {
     saveOutfits(o);
   };
 
+  // Cleans up every photo that hasn't been cleaned yet. Returns { cleaned, skipped }.
+  const cleanAllPhotos = async () => {
+    let cleaned = 0;
+    let skipped = 0;
+    const flags = {};
+    for (const item of items) {
+      for (const [key, flag] of [[item.id, 'photoClean'], [`${item.id}:back`, 'backClean']]) {
+        if (!images[key] || item[flag]) continue;
+        const res = await cleanPhoto(images[key]);
+        if (!res) {
+          skipped++;
+          continue;
+        }
+        try {
+          await storePhoto(key, res.uri);
+          (flags[item.id] ||= {})[flag] = true;
+          cleaned++;
+        } catch {
+          skipped++;
+        }
+      }
+    }
+    if (cleaned) updateItems(items.map((i) => (flags[i.id] ? { ...i, ...flags[i.id] } : i)));
+    return { cleaned, skipped };
+  };
+
+  // ---- trips ----
+  const saveTrip = (trip) =>
+    setTrips((prev) => {
+      const next = prev.some((t) => t.id === trip.id) ? prev.map((t) => (t.id === trip.id ? trip : t)) : [trip, ...prev];
+      saveTrips(next);
+      return next;
+    });
+  const updateTrip = (id, fn) =>
+    setTrips((prev) => {
+      const next = prev.map((t) => (t.id === id ? fn(t) : t));
+      saveTrips(next);
+      return next;
+    });
+  const deleteTrip = (id) =>
+    setTrips((prev) => {
+      const next = prev.filter((t) => t.id !== id);
+      saveTrips(next);
+      return next;
+    });
+
   // ---- outfits ----
   const wear = (outfitItems, occasion) => {
     const now = Date.now();
@@ -162,12 +216,13 @@ export default function App() {
     const sig = outfitItems.map((i) => i.id).sort().join('+');
     if (outfits.some((o) => [...o.itemIds].sort().join('+') === sig)) {
       notify('Already saved', 'This look is in your Looks tab.');
-      return;
+      return false;
     }
     const next = [{ id: uid(), itemIds: outfitItems.map((i) => i.id), occasion, createdAt: Date.now() }, ...outfits];
     setOutfits(next);
     saveOutfits(next);
     updateFeedback(applyFeedback(feedback, outfitItems, 1));
+    return true;
   };
 
   const pass = (outfitItems) => updateFeedback(applyFeedback(feedback, outfitItems, -1));
@@ -189,6 +244,7 @@ export default function App() {
     log,
     feedback,
     prefs,
+    trips,
   });
 
   const restore = async (data) => {
@@ -215,6 +271,13 @@ export default function App() {
     const nextL = [...log, ...(data.log || []).filter((l) => l && !lIds.has(l.id))].sort((a, b) => b.date - a.date);
     setLog(nextL);
     saveLog(nextL);
+    const tIds = new Set(trips.map((t) => t.id));
+    const freshTrips = (data.trips || []).filter((t) => t && t.id && Array.isArray(t.stops) && !tIds.has(t.id));
+    if (freshTrips.length) {
+      const nextT = [...trips, ...freshTrips];
+      setTrips(nextT);
+      saveTrips(nextT);
+    }
     if (data.prefs) changePrefs(data.prefs);
     if (data.feedback && !Object.keys(feedback.pairs || {}).length) updateFeedback(data.feedback);
     return fresh.length;
@@ -230,6 +293,7 @@ export default function App() {
     setOutfits([]);
     setLog([]);
     setFeedback({});
+    setTrips([]);
     setPrefs(DEFAULT_PREFS);
     setLockId(null);
     setTab('closet');
@@ -291,6 +355,21 @@ export default function App() {
         }}
       />
     );
+  } else if (tab === 'trips') {
+    screen = (
+      <TripsScreen
+        items={items}
+        images={images}
+        prefs={prefs}
+        feedback={feedback}
+        trips={trips}
+        onSaveTrip={saveTrip}
+        onUpdateTrip={updateTrip}
+        onDeleteTrip={deleteTrip}
+        onOpenItem={openItem}
+        onSaveLook={saveOutfit}
+      />
+    );
   } else {
     screen = (
       <ProfileScreen
@@ -299,6 +378,8 @@ export default function App() {
         log={log}
         prefs={prefs}
         onChangePrefs={changePrefs}
+        photoCount={items.reduce((n, i) => n + (images[i.id] && !i.photoClean ? 1 : 0) + (images[`${i.id}:back`] && !i.backClean ? 1 : 0), 0)}
+        onCleanAllPhotos={cleanAllPhotos}
         aiKey={aiKey}
         onChangeAiKey={(k) => {
           setAiKey(k);
@@ -350,6 +431,7 @@ export default function App() {
         imageUri={editor?.item ? images[editor.item.id] : null}
         backUri={editor?.item ? images[`${editor.item.id}:back`] : null}
         aiKey={aiKey}
+        autoClean={prefs.cleanPhotos !== false}
         onSave={saveItem}
         onDelete={deleteItem}
         onStyle={(item) => {
@@ -392,5 +474,5 @@ const styles = StyleSheet.create({
   tabWrap: { backgroundColor: colors.card, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   tabBar: { flexDirection: 'row', height: 56 },
   tab: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  tabText: { fontSize: 11, fontWeight: '600', marginTop: 2 },
+  tabText: { fontSize: 10, fontWeight: '600', marginTop: 2 },
 });

@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
-import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import Chip from '../components/Chip';
 import { COLORS } from '../catalog';
 import { AESTHETICS, SOURCES } from '../aesthetics';
+import { canCleanPhotos } from '../cleanup';
 import { confirm, notify } from '../dialogs';
 import { pickTextFile, shareTextFile } from '../files';
 import { closetInsights } from '../stylist';
@@ -20,6 +21,8 @@ export default function ProfileScreen({
   log,
   prefs,
   onChangePrefs,
+  photoCount,
+  onCleanAllPhotos,
   aiKey,
   onChangeAiKey,
   buildBackup,
@@ -49,6 +52,21 @@ export default function ProfileScreen({
       await shareTextFile(`closet-copilot-backup-${stamp}.json`, JSON.stringify(data), 'application/json');
     } catch (e) {
       notify('Backup failed', e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cleanAll = async () => {
+    setBusy(true);
+    try {
+      const { cleaned, skipped } = await onCleanAllPhotos();
+      notify(
+        cleaned ? 'Photos cleaned up' : 'Nothing changed',
+        `${cleaned} photo${cleaned === 1 ? '' : 's'} cleaned up.${
+          skipped ? ` ${skipped} couldn’t be separated from the background and ${skipped === 1 ? 'was' : 'were'} left as taken.` : ''
+        }`
+      );
     } finally {
       setBusy(false);
     }
@@ -118,6 +136,33 @@ export default function ProfileScreen({
           <Text style={styles.link}>Reset what the stylist has learned from your likes</Text>
         </Pressable>
       </View>
+
+      {canCleanPhotos && (
+        <>
+          <Text style={styles.section}>Photo clean-up</Text>
+          <View style={styles.card}>
+            <View style={styles.switchRow}>
+              <View style={{ flex: 1, marginRight: spacing.md }}>
+                <Text style={styles.optTitle}>Clean up new photos</Text>
+                <Text style={styles.optSub}>Removes the background and centers the piece on white, like a catalog shot.</Text>
+              </View>
+              <Switch value={prefs.cleanPhotos !== false} onValueChange={(v) => onChangePrefs({ cleanPhotos: v })} />
+            </View>
+            {photoCount > 0 && (
+              <Pressable onPress={cleanAll}>
+                <Text style={styles.link}>
+                  Clean up the {photoCount} photo{photoCount === 1 ? '' : 's'} already in your closet
+                </Text>
+              </Pressable>
+            )}
+            <Text style={styles.small}>
+              Runs on your phone — nothing is uploaded. Works best when the piece is laid flat or hung against a plain surface
+              that contrasts with it, with the whole piece in frame. If a photo can’t be separated cleanly it’s kept as
+              taken, and you can always switch a piece back to the original before saving.
+            </Text>
+          </View>
+        </>
+      )}
 
       <Text style={styles.section}>AI auto-fill (free)</Text>
       <View style={styles.card}>
@@ -211,7 +256,7 @@ export default function ProfileScreen({
 
       <Text style={styles.section}>Your data</Text>
       <View style={styles.card}>
-        <Row title="Back up closet" sub="Photos, pieces, looks and preferences in one file." onPress={backup} />
+        <Row title="Back up closet" sub="Photos, pieces, looks, trips and preferences in one file." onPress={backup} />
         <Row title="Restore from backup" sub="Adds anything missing; nothing is overwritten." onPress={restore} />
         {hasDemo ? (
           <Row title="Remove sample pieces" sub="Deletes the demo items, keeps your own." onPress={onRemoveDemo} />
@@ -280,6 +325,7 @@ const styles = StyleSheet.create({
   optTitle: { color: colors.text, fontSize: 15, fontWeight: '600' },
   optSub: { color: colors.muted, fontSize: 12 },
   wrap: { flexDirection: 'row', flexWrap: 'wrap' },
+  switchRow: { flexDirection: 'row', alignItems: 'center' },
   link: { color: colors.accent, fontSize: 13, fontWeight: '600', marginTop: spacing.sm },
   body: { color: colors.text, fontSize: 14, lineHeight: 21 },
   step: { color: colors.text, fontSize: 14, lineHeight: 20, marginTop: spacing.sm },

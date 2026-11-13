@@ -28,6 +28,14 @@ The stylist scores every possible outfit from your closet on:
 - **Variety:** recently worn pieces rank lower
 - **Learned taste:** *Wear / Save / Not for me* adjust pair and color preferences over time
 
+## Catalog-style photos (`src/segment.js`)
+
+A snapshot of a shirt on a bed becomes a clean product shot: background removed, lighting evened out, the piece centered on white. It runs on the phone with no AI service. The colors around the photo's edge are treated as background and flood-filled inward, following soft shadows and stopping at the garment's edge. If the piece can't be told apart from its background, the original photo is kept.
+
+## Trip planner (`src/trip.js`, `src/tripWeather.js`)
+
+Pick destinations and dates. The planner pulls each day's weather from Open-Meteo (the live forecast inside about two weeks, otherwise what those dates were typically like over the last five years), builds an outfit for everything on each day's agenda with the same style engine, and trades a little outfit score for a lighter bag by re-using shoes, jackets and trousers within sensible re-wear limits. The packing list adds essentials counted from the trip (socks per day, an umbrella if rain is forecast, a plug adapter abroad) and can be ticked off or shared.
+
 ## Style vibes grounded in sources (`src/aesthetics.js`)
 
 There are eight vibes: old money, preppy, minimalist, streetwear, workwear, coastal, dark academia and athleisure. Each defines liked and disliked pieces, a palette, patterns, materials, fits and details, drawn from:
@@ -46,7 +54,10 @@ src/catalog.js      # clothing types, colors, patterns
 src/color.js        # color theory helpers
 src/ai.js           # Gemini auto-fill with model fallback + output validation
 src/weather.js      # local weather for outfit fit
-src/screens/        # Closet, Item editor, Style, Looks, Profile
+src/segment.js      # photo clean-up (background removal)
+src/trip.js         # trip outfit planner + packing list
+src/tripWeather.js  # place search, forecast and typical weather
+src/screens/        # Closet, Item editor, Style, Looks, Trips, Profile
 ```
 
 ## Run it

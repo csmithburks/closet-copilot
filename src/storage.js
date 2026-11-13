@@ -6,6 +6,7 @@ const KEYS = {
   log: 'cc:wearLog', // what was worn when
   feedback: 'cc:feedback',
   prefs: 'cc:prefs',
+  trips: 'cc:trips',
   aiKey: 'cc:aiKey', // kept out of backups on purpose
 };
 
@@ -15,6 +16,7 @@ export const DEFAULT_PREFS = {
   occasion: 'casual',
   aesthetic: null,
   tempUnit: 'F',
+  cleanPhotos: true, // turn new photos into catalog-style shots
 };
 
 async function read(key, fallback) {
@@ -43,6 +45,8 @@ export const loadFeedback = () => read(KEYS.feedback, {});
 export const saveFeedback = (v) => write(KEYS.feedback, v);
 export const loadPrefs = async () => ({ ...DEFAULT_PREFS, ...(await read(KEYS.prefs, {})) });
 export const savePrefs = (v) => write(KEYS.prefs, v);
+export const loadTrips = () => read(KEYS.trips, []);
+export const saveTrips = (v) => write(KEYS.trips, v);
 export const loadAiKey = () => read(KEYS.aiKey, '');
 export const saveAiKey = (v) => write(KEYS.aiKey, v || null);
 

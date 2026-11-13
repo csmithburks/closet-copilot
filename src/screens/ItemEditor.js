@@ -8,6 +8,7 @@ import { confirm, notify } from '../dialogs';
 import { AESTHETICS } from '../aesthetics';
 import { autoTag } from '../ai';
 import { pickPhoto } from '../photo';
+import { canCleanPhotos, cleanPhoto } from '../cleanup';
 import { colors, radius, serif, spacing } from '../theme';
 
 const blank = () => ({
@@ -24,6 +25,8 @@ const blank = () => ({
   lastWorn: null,
   hasPhoto: false,
   hasBack: false,
+  photoClean: false,
+  backClean: false,
   graphic: false,
   styles: [],
   material: null,
@@ -32,13 +35,17 @@ const blank = () => ({
 });
 
 // item: existing item to edit, or null to add a new one.
-export default function ItemEditor({ visible, item, imageUri, backUri, aiKey, onSave, onDelete, onStyle, onClose }) {
+export default function ItemEditor({ visible, item, imageUri, backUri, aiKey, autoClean, onSave, onDelete, onStyle, onClose }) {
   const [draft, setDraft] = useState(blank());
   const [photo, setPhoto] = useState(null);
   const [back, setBack] = useState(null);
   const [detected, setDetected] = useState(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiNote, setAiNote] = useState(null);
+  // Per side: the photo as taken and its cleaned-up version, so you can flip between them before saving.
+  const [versions, setVersions] = useState({});
+  const [cleaning, setCleaning] = useState(null);
+  const [cleanNote, setCleanNote] = useState(null);
 
   useEffect(() => {
     if (!visible) return;
@@ -48,6 +55,9 @@ export default function ItemEditor({ visible, item, imageUri, backUri, aiKey, on
     setDetected(null);
     setAiNote(null);
     setAiBusy(false);
+    setVersions({});
+    setCleaning(null);
+    setCleanNote(null);
   }, [visible, item, imageUri, backUri]);
 
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
@@ -79,21 +89,70 @@ export default function ItemEditor({ visible, item, imageUri, backUri, aiKey, on
     }
   };
 
+  const FLAG = { front: 'photoClean', back: 'backClean' };
+  const show = (side, uri, isClean) => {
+    (side === 'back' ? setBack : setPhoto)(uri);
+    set({ [FLAG[side]]: !!isClean });
+  };
+
+  // Makes the catalog-style version of a photo. Returns it, or null (with a hint) if it couldn't.
+  const makeClean = async (side, uri) => {
+    setCleaning(side);
+    setCleanNote(null);
+    const c = await cleanPhoto(uri);
+    setCleaning(null);
+    if (c) setVersions((v) => ({ ...v, [side]: { orig: uri, clean: c.uri } }));
+    else {
+      setVersions((v) => ({ ...v, [side]: { orig: uri, clean: null, failed: true } }));
+      setCleanNote('Couldn’t lift this one off its background, so the photo is kept as taken. It works best on a plain surface that contrasts with the piece, with the whole piece in frame.');
+    }
+    return c;
+  };
+
   const addPhoto = async (side, source) => {
     const res = await pickPhoto(source);
     if (!res) return;
+    let uri = res.uri;
+    let color = res.color;
+    let cleaned = false;
+    setVersions((v) => ({ ...v, [side]: null }));
+    if (canCleanPhotos && autoClean) {
+      const c = await makeClean(side, res.uri);
+      if (c) {
+        uri = c.uri;
+        color = c.color || color;
+        cleaned = true;
+      }
+    }
+    show(side, uri, cleaned);
     if (side === 'back') {
-      setBack(res.uri);
       // Re-run with both sides so a graphic on the back is caught.
-      if (aiKey && photo) runAi(photo, res.uri);
+      if (aiKey && photo) runAi(photo, uri);
       return;
     }
-    setPhoto(res.uri);
-    if (aiKey) runAi(res.uri, back);
-    else if (res.color) {
-      setDetected(res.color);
-      set({ color: res.color });
+    if (aiKey) runAi(uri, back);
+    else if (color) {
+      setDetected(color);
+      set({ color });
     }
+  };
+
+  // The button under a photo: clean it up, or flip between cleaned and original.
+  const cleanAction = (side, uri) => {
+    if (!canCleanPhotos) return null;
+    if (cleaning === side) return { label: 'Cleaning up…' };
+    if (!uri) return null;
+    const v = versions[side];
+    if (v?.clean && uri === v.clean) return { label: '↩ Use original', run: () => show(side, v.orig, false) };
+    if (v?.clean) return { label: '✨ Use cleaned', run: () => show(side, v.clean, true) };
+    if (v?.failed || draft[FLAG[side]]) return null;
+    return {
+      label: '✨ Clean up',
+      run: async () => {
+        const c = await makeClean(side, uri);
+        if (c) show(side, c.uri, true);
+      },
+    };
   };
 
   const save = () => {
@@ -156,14 +215,30 @@ export default function ItemEditor({ visible, item, imageUri, backUri, aiKey, on
                     <Text style={styles.slotBtnText}>🖼</Text>
                   </Pressable>
                   {!!uri && (
-                    <Pressable style={styles.slotBtn} onPress={() => setUri(null)}>
+                    <Pressable
+                      style={styles.slotBtn}
+                      onPress={() => {
+                        setUri(null);
+                        setVersions((v) => ({ ...v, [side]: null }));
+                        set({ [FLAG[side]]: false });
+                      }}
+                    >
                       <Text style={[styles.slotBtnText, { color: colors.danger }]}>✕</Text>
                     </Pressable>
                   )}
                 </View>
+                {(() => {
+                  const a = cleanAction(side, uri);
+                  return a ? (
+                    <Pressable onPress={a.run} disabled={!a.run} hitSlop={6}>
+                      <Text style={styles.cleanBtn}>{a.label}</Text>
+                    </Pressable>
+                  ) : null;
+                })()}
               </View>
             ))}
           </View>
+          {!!cleanNote && <Text style={styles.photoHint}>{cleanNote}</Text>}
 
           {aiKey ? (
             <Pressable
@@ -175,7 +250,7 @@ export default function ItemEditor({ visible, item, imageUri, backUri, aiKey, on
             </Pressable>
           ) : (
             <Text style={styles.photoHint}>
-              Tip: lay it flat on a plain background. Turn on AI auto-fill in Profile to have everything below filled in
+              Tip: lay it flat on a plain surface that contrasts with it — the photo is cleaned up into a catalog-style shot. Turn on AI auto-fill in Profile to have everything below filled in
               from the photo.
             </Text>
           )}
@@ -350,6 +425,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   slotBtnText: { fontSize: 16 },
+  cleanBtn: { color: colors.accent, fontSize: 13, fontWeight: '700', marginTop: 8 },
   aiBtn: { backgroundColor: colors.accent, borderRadius: 999, paddingVertical: 12, alignItems: 'center', marginBottom: spacing.sm },
   aiBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
   aiNote: { color: colors.good, fontSize: 13, lineHeight: 18, marginBottom: spacing.md },
